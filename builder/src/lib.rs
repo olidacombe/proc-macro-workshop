@@ -4,9 +4,14 @@ use syn::{parse_macro_input, DeriveInput};
 
 #[proc_macro_derive(Builder)]
 pub fn derive(input: TokenStream) -> TokenStream {
-    let _input = parse_macro_input!(input as DeriveInput);
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = input.ident;
 
-    let expanded = quote! {};
+    let expanded = quote! {
+        impl #name {
+            pub fn builder() {}
+        }
+    };
 
     TokenStream::from(expanded)
 }
