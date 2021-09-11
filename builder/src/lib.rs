@@ -16,16 +16,27 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         _ => unimplemented!(),
     };
 
-    let (field_names, field_types): (Vec<_>, Vec<_>) = fields.unzip();
+    let (field_name, field_type): (Vec<_>, Vec<_>) = fields.unzip();
 
     let expanded = quote! {
-        struct #builder_name {
-            #(#field_names: Option<#field_types>),*
-        }
         impl #name {
-            pub fn builder() {}
+            pub fn builder() -> #builder_name {
+                #builder_name {
+                    #(#field_name: None),*
+                }
+            }
+        }
+        pub struct #builder_name {
+            #(#field_name: Option<#field_type>),*
+        }
+        impl #builder_name {
+        #(fn #field_name(&mut self, #field_name: #field_type) -> &mut Self {
+            self.#field_name = Some(#field_name);
+            self
+        })*
         }
     };
-
+    // impl #builder_name {
+    // }
     proc_macro::TokenStream::from(expanded)
 }
