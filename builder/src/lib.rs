@@ -8,8 +8,8 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let name = input.ident;
     let builder_name = format_ident!("{}Builder", name);
 
-    let fields = match input.data {
-        Data::Struct(s) => match s.fields {
+    let builder_fields = match input.data {
+        Data::Struct(ref s) => match s.fields.clone() {
             Fields::Named(fields) => fields.named.into_pairs().map(|mut pair| {
                 let mut field = pair.value_mut();
                 let ty = &field.ty;
@@ -25,12 +25,29 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         _ => unimplemented!(),
     };
 
+    let builder_defaults = match input.data {
+        Data::Struct(s) => match s.fields {
+            Fields::Named(fields) => fields.named.into_pairs().map(|mut pair| {
+                pair.value_mut().ty = parse_quote! {
+                    None
+                };
+                pair
+            }),
+            _ => unimplemented!(),
+        },
+        _ => unimplemented!(),
+    };
+
     let expanded = quote! {
-        pub struct #builder_name {
-            #(#fields)*
+        struct #builder_name {
+            #(#builder_fields)*
         }
         impl #name {
-            pub fn builder() {}
+            pub fn builder() -> #builder_name {
+                #builder_name {
+                    #(#builder_defaults)*
+                }
+            }
         }
     };
 
