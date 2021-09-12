@@ -1,6 +1,16 @@
 use proc_macro;
+use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
+
+// TODO also take type and return empty ident if type
+// is optional itself?
+fn required_option(name: &syn::Ident) -> TokenStream {
+    let error_msg = format!("Required parameter `{}` not specified", name);
+    quote! {
+        #name.take().ok_or(#error_msg)
+    }
+}
 
 #[proc_macro_derive(Builder)]
 pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -17,6 +27,9 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     };
 
     let (field_name, field_type): (Vec<_>, Vec<_>) = fields.unzip();
+    let field_name_required = field_name
+        .iter()
+        .map(|ref n| required_option(&n.as_ref().unwrap()));
 
     let expanded = quote! {
         impl #name {
@@ -30,13 +43,16 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             #(#field_name: Option<#field_type>),*
         }
         impl #builder_name {
-        #(fn #field_name(&mut self, #field_name: #field_type) -> &mut Self {
-            self.#field_name = Some(#field_name);
-            self
-        })*
+            #(pub fn #field_name(&mut self, #field_name: #field_type) -> &mut Self {
+                self.#field_name = Some(#field_name);
+                self
+            })*
+            pub fn build(&mut self) -> Result<#name, Box<dyn std::error::Error>> {
+                Ok(#name {
+                    #(#field_name: self.#field_name_required?),*
+                })
+            }
         }
     };
-    // impl #builder_name {
-    // }
     proc_macro::TokenStream::from(expanded)
 }
