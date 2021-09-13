@@ -11,6 +11,39 @@ fn required_option_getter(name: &syn::Ident) -> TokenStream {
     }
 }
 
+type SubMeta = syn::punctuated::Punctuated<syn::NestedMeta, syn::token::Comma>;
+
+fn get_builder_attr(attrs: &Vec<syn::Attribute>) -> Option<SubMeta> {
+    attrs.iter().find_map(|attr| {
+        if let Ok(syn::Meta::List(list)) = attr.parse_meta() {
+            if list.path.is_ident("builder") {
+                return Some(list.nested);
+            }
+        }
+        None
+    })
+}
+
+fn each_method(sub_meta: &SubMeta) -> Option<syn::Ident> {
+    sub_meta
+        .iter()
+        .filter_map(|s| match s {
+            syn::NestedMeta::Meta(meta) => Some(meta),
+            _ => None,
+        })
+        .filter_map(|m| match m {
+            syn::Meta::NameValue(nv) => Some(nv),
+            _ => None,
+        })
+        .find_map(|nv| match nv.path.is_ident("each") {
+            // TODO get an ident out of this?
+            true => Some(format_ident!("{}", nv.lit)),
+            false => None,
+        });
+
+    None
+}
+
 struct BuilderField {
     ident: syn::Ident,
     ty: syn::Type,
@@ -53,18 +86,26 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             ident.clone(),
             quote! {
                 pub fn #ident(&mut self, #ident: #ty) -> &mut Self {
-                    self.#ident= Some(#ident);
+                    self.#ident = Some(#ident);
                     self
                 }
 
             },
         );
 
-        // TODO here go through attrs looking for
-        // builder(each = ...) and inserting on setters
-        // a vec appender whenever found
-        // HINT: Meta from parse_meta will be a list with
-        // nested meta being a NameValue...
+        if let Some(builder_attr) = get_builder_attr(&attrs) {
+            if let Some(each) = each_method(&builder_attr) {
+                setters.insert(
+                    each,
+                    quote! {
+                        pub fn #each<T>(&mut self, item: T) -> &mut Self {
+                            self.#ident.push(item);
+                            self
+                        }
+                    },
+                );
+            }
+        }
 
         BuilderField {
             field_getter,
