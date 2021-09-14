@@ -2,7 +2,7 @@ use proc_macro;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use std::collections::HashMap;
-use syn::{parse_macro_input, Data, DeriveInput, Fields};
+use syn::{parse_macro_input, parse_quote, Data, DeriveInput, Fields};
 
 fn required_option_getter(name: &syn::Ident) -> TokenStream {
     let error_msg = format!("Required parameter `{}` not specified", name);
@@ -49,6 +49,8 @@ fn each_method(sub_meta: &SubMeta) -> Option<syn::Ident> {
 struct BuilderField {
     ident: syn::Ident,
     ty: syn::Type,
+    outer_ty: syn::Type,
+    default: proc_macro2::TokenStream,
     field_getter: proc_macro2::TokenStream,
     setters: HashMap<syn::Ident, proc_macro2::TokenStream>,
 }
@@ -71,14 +73,20 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     }
     .map(|(attrs, ident, mut ty)| {
         let mut field_getter = required_option_getter(&ident);
+        let mut inner_ty: Option<syn::Type> = None;
+        let mut outer_ty: parse_quote! {Option};
+        let mut single_ty: Option<syn::Type> = None;
+        let mut default = parse_quote! {None};
         if let syn::Type::Path(ref p) = ty {
             if let Some(ref seg) = p.path.segments.first() {
-                if seg.ident == "Option" {
-                    if let syn::PathArguments::AngleBracketed(ref args) = &seg.arguments {
-                        if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                if let syn::PathArguments::AngleBracketed(ref args) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                        if seg.ident == "Option" {
                             field_getter = quote! { #ident.take() };
-                            ty = inner_ty.clone();
-                        };
+                            ty = inner.clone();
+                        } else {
+                            inner_ty = Some(inner.clone());
+                        }
                     }
                 }
             }
@@ -97,13 +105,18 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
         if let Some(builder_attr) = get_builder_attr(&attrs) {
             if let Some(each) = each_method(&builder_attr) {
-                let setter = quote! {
-                    pub fn #each<T>(&mut self, item: T) -> &mut Self {
-                        self.#ident.push(item);
-                        self
-                    }
-                };
-                setters.insert(each, setter);
+                if let Some(item_ty) = inner_ty {
+                    outer_ty = quote! {Vec};
+                    default = quote! {Vec::<#item_ty>::new()};
+                    let setter = quote! {
+                        pub fn #each(&mut self, item: #item_ty) -> &mut Self {
+                            self.#ident.push(item);
+                            self
+                        }
+                    };
+                    setters.insert(each, setter);
+                    ty = item_ty;
+                }
             }
         }
 
@@ -111,6 +124,8 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             field_getter,
             ident,
             ty,
+            outer_ty,
+            default,
             setters,
         }
     })
