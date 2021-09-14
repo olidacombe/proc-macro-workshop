@@ -36,12 +36,14 @@ fn each_method(sub_meta: &SubMeta) -> Option<syn::Ident> {
             _ => None,
         })
         .find_map(|nv| match nv.path.is_ident("each") {
-            // TODO get an ident out of this?
-            true => Some(format_ident!("{}", nv.lit)),
+            true => match &nv.lit {
+                syn::Lit::Str(s) => {
+                    Some(syn::Ident::new(&s.value(), proc_macro2::Span::call_site()))
+                }
+                _ => None,
+            },
             false => None,
-        });
-
-    None
+        })
 }
 
 struct BuilderField {
@@ -95,15 +97,13 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
         if let Some(builder_attr) = get_builder_attr(&attrs) {
             if let Some(each) = each_method(&builder_attr) {
-                setters.insert(
-                    each,
-                    quote! {
-                        pub fn #each<T>(&mut self, item: T) -> &mut Self {
-                            self.#ident.push(item);
-                            self
-                        }
-                    },
-                );
+                let setter = quote! {
+                    pub fn #each<T>(&mut self, item: T) -> &mut Self {
+                        self.#ident.push(item);
+                        self
+                    }
+                };
+                setters.insert(each, setter);
             }
         }
 
