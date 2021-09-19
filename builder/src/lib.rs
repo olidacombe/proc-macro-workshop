@@ -2,12 +2,18 @@ use proc_macro;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use std::collections::HashMap;
-use syn::{parse_macro_input, parse_quote, Data, DeriveInput, Fields};
+use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
 fn required_option_getter(name: &Ident) -> TokenStream {
     let error_msg = format!("Required parameter `{}` not specified", name);
     quote! {
         #name.take().ok_or(#error_msg)?
+    }
+}
+
+fn default_empty_vector_getter(name: &Ident) -> TokenStream {
+    quote! {
+        #name.take().unwrap_or_else(|| Vec::new())
     }
 }
 
@@ -47,8 +53,6 @@ fn each_method(sub_meta: &SubMeta) -> Option<Ident> {
 struct BuilderField {
     ident: Ident,
     ty: syn::Type,
-    outer_ty: Ident,
-    default: TokenStream,
     field_getter: TokenStream,
     setters: HashMap<Ident, TokenStream>,
 }
@@ -72,8 +76,6 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     .map(|(attrs, ident, mut ty)| {
         let mut field_getter = required_option_getter(&ident);
         let mut inner_ty: Option<syn::Type> = None;
-        let mut outer_ty = Ident::new("Option", Span::call_site());
-        let mut default = parse_quote! {None};
         if let syn::Type::Path(ref p) = ty {
             if let Some(ref seg) = p.path.segments.first() {
                 if let syn::PathArguments::AngleBracketed(ref args) = &seg.arguments {
@@ -103,26 +105,15 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         if let Some(builder_attr) = get_builder_attr(&attrs) {
             if let Some(each) = each_method(&builder_attr) {
                 if let Some(item_ty) = inner_ty {
-                    setters.insert(
-                        ident.clone(),
-                        quote! {
-                            pub fn #ident(&mut self, #ident: Vec<#item_ty>) -> &mut Self {
-                                self.#ident = #ident;
-                                self
-                            }
-                        },
-                    );
-                    outer_ty = Ident::new("Vec", Span::call_site());
-                    default = quote! {Vec::<#item_ty>::new()};
                     let setter = quote! {
                         pub fn #each(&mut self, item: #item_ty) -> &mut Self {
-                            self.#ident.push(item);
+                            let mut v = self.#ident.get_or_insert_with(|| Vec::new());
+                            v.push(item);
                             self
                         }
                     };
-                    field_getter = quote! { #ident.clone() };
                     setters.insert(each, setter);
-                    ty = item_ty;
+                    field_getter = default_empty_vector_getter(&ident);
                 }
             }
         }
@@ -131,17 +122,13 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             field_getter,
             ident,
             ty,
-            outer_ty,
-            default,
             setters,
         }
     })
     .collect();
 
     let field_name: Vec<&Ident> = fields.iter().map(|f| &f.ident).collect();
-    let field_default: Vec<&TokenStream> = fields.iter().map(|f| &f.default).collect();
     let field_inner_type: Vec<&syn::Type> = fields.iter().map(|f| &f.ty).collect();
-    let field_outer_type: Vec<&Ident> = fields.iter().map(|f| &f.outer_ty).collect();
     let field_name_required: Vec<&TokenStream> = fields.iter().map(|f| &f.field_getter).collect();
     let setters: Vec<&TokenStream> = fields
         .iter()
@@ -153,12 +140,12 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         impl #name {
             pub fn builder() -> #builder_name {
                 #builder_name {
-                    #(#field_name: #field_default),*
+                    #(#field_name: None),*
                 }
             }
         }
         pub struct #builder_name {
-            #(#field_name: #field_outer_type<#field_inner_type>),*
+            #(#field_name: Option<#field_inner_type>),*
         }
         impl #builder_name {
             #(#setters)*
