@@ -1,10 +1,10 @@
 use proc_macro;
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use std::collections::HashMap;
 use syn::{parse_macro_input, parse_quote, Data, DeriveInput, Fields};
 
-fn required_option_getter(name: &syn::Ident) -> TokenStream {
+fn required_option_getter(name: &Ident) -> TokenStream {
     let error_msg = format!("Required parameter `{}` not specified", name);
     quote! {
         #name.take().ok_or(#error_msg)?
@@ -24,7 +24,7 @@ fn get_builder_attr(attrs: &Vec<syn::Attribute>) -> Option<SubMeta> {
     })
 }
 
-fn each_method(sub_meta: &SubMeta) -> Option<syn::Ident> {
+fn each_method(sub_meta: &SubMeta) -> Option<Ident> {
     sub_meta
         .iter()
         .filter_map(|s| match s {
@@ -37,9 +37,7 @@ fn each_method(sub_meta: &SubMeta) -> Option<syn::Ident> {
         })
         .find_map(|nv| match nv.path.is_ident("each") {
             true => match &nv.lit {
-                syn::Lit::Str(s) => {
-                    Some(syn::Ident::new(&s.value(), proc_macro2::Span::call_site()))
-                }
+                syn::Lit::Str(s) => Some(Ident::new(&s.value(), Span::call_site())),
                 _ => None,
             },
             false => None,
@@ -47,12 +45,12 @@ fn each_method(sub_meta: &SubMeta) -> Option<syn::Ident> {
 }
 
 struct BuilderField {
-    ident: syn::Ident,
+    ident: Ident,
     ty: syn::Type,
-    outer_ty: syn::Type,
-    default: proc_macro2::TokenStream,
-    field_getter: proc_macro2::TokenStream,
-    setters: HashMap<syn::Ident, proc_macro2::TokenStream>,
+    outer_ty: Ident,
+    default: TokenStream,
+    field_getter: TokenStream,
+    setters: HashMap<Ident, TokenStream>,
 }
 
 #[proc_macro_derive(Builder, attributes(builder))]
@@ -74,8 +72,7 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     .map(|(attrs, ident, mut ty)| {
         let mut field_getter = required_option_getter(&ident);
         let mut inner_ty: Option<syn::Type> = None;
-        let mut outer_ty: parse_quote! {Option};
-        let mut single_ty: Option<syn::Type> = None;
+        let mut outer_ty = Ident::new("Option", Span::call_site());
         let mut default = parse_quote! {None};
         if let syn::Type::Path(ref p) = ty {
             if let Some(ref seg) = p.path.segments.first() {
@@ -91,7 +88,7 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 }
             }
         }
-        let mut setters = HashMap::<syn::Ident, proc_macro2::TokenStream>::new();
+        let mut setters = HashMap::<Ident, TokenStream>::new();
         setters.insert(
             ident.clone(),
             quote! {
@@ -106,7 +103,16 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         if let Some(builder_attr) = get_builder_attr(&attrs) {
             if let Some(each) = each_method(&builder_attr) {
                 if let Some(item_ty) = inner_ty {
-                    outer_ty = quote! {Vec};
+                    setters.insert(
+                        ident.clone(),
+                        quote! {
+                            pub fn #ident(&mut self, #ident: Vec<#item_ty>) -> &mut Self {
+                                self.#ident = #ident;
+                                self
+                            }
+                        },
+                    );
+                    outer_ty = Ident::new("Vec", Span::call_site());
                     default = quote! {Vec::<#item_ty>::new()};
                     let setter = quote! {
                         pub fn #each(&mut self, item: #item_ty) -> &mut Self {
@@ -114,6 +120,7 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                             self
                         }
                     };
+                    field_getter = quote! { #ident.clone() };
                     setters.insert(each, setter);
                     ty = item_ty;
                 }
@@ -131,11 +138,12 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     })
     .collect();
 
-    let field_name: Vec<&syn::Ident> = fields.iter().map(|f| &f.ident).collect();
+    let field_name: Vec<&Ident> = fields.iter().map(|f| &f.ident).collect();
+    let field_default: Vec<&TokenStream> = fields.iter().map(|f| &f.default).collect();
     let field_inner_type: Vec<&syn::Type> = fields.iter().map(|f| &f.ty).collect();
-    let field_name_required: Vec<&proc_macro2::TokenStream> =
-        fields.iter().map(|f| &f.field_getter).collect();
-    let setters: Vec<&proc_macro2::TokenStream> = fields
+    let field_outer_type: Vec<&Ident> = fields.iter().map(|f| &f.outer_ty).collect();
+    let field_name_required: Vec<&TokenStream> = fields.iter().map(|f| &f.field_getter).collect();
+    let setters: Vec<&TokenStream> = fields
         .iter()
         .map(|f| f.setters.values())
         .flatten()
@@ -145,12 +153,12 @@ pub fn derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         impl #name {
             pub fn builder() -> #builder_name {
                 #builder_name {
-                    #(#field_name: None),*
+                    #(#field_name: #field_default),*
                 }
             }
         }
         pub struct #builder_name {
-            #(#field_name: Option<#field_inner_type>),*
+            #(#field_name: #field_outer_type<#field_inner_type>),*
         }
         impl #builder_name {
             #(#setters)*
